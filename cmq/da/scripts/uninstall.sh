@@ -1,5 +1,5 @@
 #!/bin/sh
 
-echo "This plugin is uninstalled by uninstalling csf from the root shell"
+echo "This plugin is uninstalled by running /etc/cmq/uninstall.sh from the root shell"
 
 exit 0;

@@ -1,5 +1,22 @@
 ChangeLog:
 
+v4.01  - Security hardening and offline update policy
+
+	 Removed automatic version checks, package downloads, and links to the
+	 retired configserver.com infrastructure
+
+	 HTML-escaped mail queue data, message contents, command output, and user
+	 input before displaying them in the control panel
+
+	 Validated message IDs used by individual and bulk Exim operations and
+	 treated normal queue searches as literal text instead of Perl regexes
+
+	 Stopped deleting unparseable spool entries while viewing the queue and
+	 made queue cache writes atomic with corrupt-cache recovery
+
+	 Hardened the DirectAdmin setuid wrapper and installers, removed the remote
+	 Font Awesome dependency, and fixed legacy install/uninstall paths
+
 v4.00  - Changed license to GPLv3
 
 v3.05  - Removed session IP match check from DA login

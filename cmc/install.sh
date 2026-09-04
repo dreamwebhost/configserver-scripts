@@ -2,8 +2,6 @@
 ###############################################################################
 # Copyright (C) 2006-2025 Jonathan Michaelson
 #
-# https://github.com/waytotheweb/scripts
-#
 # This program is free software; you can redistribute it and/or modify it under
 # the terms of the GNU General Public License as published by the Free Software
 # Foundation; either version 3 of the License, or (at your option) any later
@@ -33,7 +31,7 @@ chmod -v 700 /usr/local/cpanel/whostmgr/docroot/cgi/configserver/cmc.cgi
 
 cp -avf cmcversion.txt /usr/local/cpanel/whostmgr/docroot/cgi/configserver/cmc/cmcversion.txt
 cp -avf cmc/ /usr/local/cpanel/whostmgr/docroot/cgi/configserver/
-cp -avf downloadservers /usr/local/cpanel/whostmgr/docroot/cgi/configserver/cmc/downloadservers
+/bin/rm -f /usr/local/cpanel/whostmgr/docroot/cgi/configserver/cmc/downloadservers
 
 VERSION=`cat /usr/local/cpanel/version | cut -d '.' -f2`
 if [ "$VERSION" -lt "65" ]; then

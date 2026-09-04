@@ -1,5 +1,5 @@
 #!/bin/sh
 
-echo "This plugin is installed by installing csf from the root shell"
+echo "This plugin is installed by running the CMQ installer from the root shell"
 
 exit 0;

@@ -1,5 +1,11 @@
 ChangeLog:
 
+4.01  - Removed all automatic version checks and package downloads
+
+	Removed runtime connections and links to the retired configserver.com
+	infrastructure. Updates must now be installed manually from a locally
+	verified package
+
 4.00  - Changed license to GPLv3
 
 3.03  - Ensure UI errors are displayed in browser to avoid blank pages

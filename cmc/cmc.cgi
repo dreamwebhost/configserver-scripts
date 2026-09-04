@@ -4,8 +4,6 @@
 ###############################################################################
 # Copyright (C) 2006-2025 Jonathan Michaelson
 #
-# https://github.com/waytotheweb/scripts
-#
 # This program is free software; you can redistribute it and/or modify it under
 # the terms of the GNU General Public License as published by the Free Software
 # Foundation; either version 3 of the License, or (at your option) any later
@@ -40,7 +38,7 @@ require Cpanel::Template;
 ###############################################################################
 # start main
 
-our ($images, $myv, $script, $versionfile, %FORM, $downloadserver);
+our ($images, $myv, $script, $versionfile, %FORM);
 
 %FORM = Cpanel::Form::parseform();
 
@@ -57,8 +55,6 @@ $script = "cmc.cgi";
 $images = "cmc";
 $versionfile = "/usr/local/cpanel/whostmgr/docroot/cgi/configserver/cmc/cmcversion.txt";
 local $| = 1;
-
-$downloadserver = &getdownloadserver;
 
 my $thisapp = "cmc";
 my $reregister;
@@ -216,28 +212,8 @@ elsif (($FORM{user} ne "") and ($FORM{user} !~ /^[a-zA-Z0-9\-\_\.\@\%\+]+$/)) {
 	print "[$FORM{user}] is not a valid user";
 }
 elsif ($FORM{action} eq "upgrade") {
-	print "Retrieving new cmc package...\n";
-	print "<pre style='white-space:pre-wrap;'>";
-	&printcmd("rm -Rfv /usr/src/cmc* ; cd /usr/src ; wget -q https://$downloadserver/cmc.tgz 2>&1");
-	print "</pre>";
-	if (! -z "/usr/src/cmc.tgz") {
-		print "Unpacking new cmc package...\n";
-		print "<pre style='white-space:pre-wrap;'>";
-		&printcmd("cd /usr/src ; tar -xzf cmc.tgz ; cd cmc ; sh install.sh 2>&1");
-		print "</pre>";
-		print "Tidying up...\n";
-		print "<pre style='white-space:pre-wrap;'>";
-		&printcmd("rm -Rfv /usr/src/cmc*");
-		print "</pre>";
-		print "...All done.\n";
-	}
-
-	open (my $IN, "<",$versionfile) or die $!;
-	flock ($IN, LOCK_SH);
-	$myv = <$IN>;
-	close ($IN);
-	chomp $myv;
-
+	print "<div class='bs-callout bs-callout-info'><h4>Automatic upgrades are disabled</h4>";
+	print "<p>Install updates manually from a locally verified package.</p></div>\n";
 	print "<hr><p><form action='$script' method='post'><input type='submit' class='btn btn-default' value='Return'></form></p>\n";
 }
 elsif ($FORM{action} eq "ms_list") {
@@ -869,24 +845,8 @@ else {
 	print "</table><br>\n";
 
 	print "<table class='table table-bordered table-striped'>\n";
-	my ($status, $text) = &urlget("https://$downloadserver/cmc/cmcversion.txt");
-	my $actv = $text;
-	my $up = 0;
-
 	print "<thead><tr><th colspan='2'>Upgrade</th></tr></thead>";
-	if ($actv ne "") {
-		if ($actv =~ /^[\d\.]*$/) {
-			if ($actv > $myv) {
-				print "<tr><form action='$script' method='post'><td><input type='hidden' name='action' value='upgrade'><input type='submit' class='btn btn-default' value='Upgrade cmc'></td><td width='100%'><b>A new version of cmc (v$actv) is available. Upgrading will retain your settings<br><a href='https://$downloadserver/cmc/changelog.txt' target='_blank'>View ChangeLog</a></b></td></form></tr>\n";
-			} else {
-				print "<tr><td colspan='2'>You appear to be running the latest version of cmc. An Upgrade button will appear here if a new version becomes available</td></tr>\n";
-			}
-			$up = 1;
-		}
-	}
-	unless ($up) {
-		print "<tr><td colspan='2'>Failed to determine the latest version of cmc. An Upgrade button will appear here if new version is detected</td></tr>\n";
-	}
+	print "<tr><td colspan='2'>Automatic version checks and downloads are disabled. Install updates manually from a locally verified package.</td></tr>\n";
 	print "</table><br>\n";
 	print  "<div class='modal fade' id='myModal' tabindex='-1' role='dialog' aria-labelledby='myModalLabel' aria-hidden='true' data-backdrop='false' style='background-color: rgba(0, 0, 0, 0.5)'>\n";
 	print "<div class='modal-dialog modal-lg' $modalstyle>\n";
@@ -916,7 +876,7 @@ else {
 }
 
 print "<pre style='white-space:pre-wrap;'>cmc: v$myv</pre>";
-print "<p>&copy;2009-2019, <a href='http://www.configserver.com' target='_blank'>ConfigServer Services</a> (Jonathan Michaelson)</p>\n";
+print "<p>&copy;2009-2019, ConfigServer Services (Jonathan Michaelson)</p>\n";
 print <<EOF;
 <script>
 	\$("#loader").hide();
@@ -1340,115 +1300,6 @@ sub splitlines {
 	return $newline;
 }
 # end splitlines
-###############################################################################
-
-###############################################################################
-# start urlget (v1.3)
-#
-# Examples:
-#my ($status, $text) = &urlget("http://prdownloads.sourceforge.net/clamav/clamav-0.92.tar.gz","/tmp/clam.tgz");
-#if ($status) {print "Oops: $text\n"}
-#
-#my ($status, $text) = &urlget("http://www.configserver.com/free/msfeversion.txt");
-#if ($status) {print "Oops: $text\n"} else {print "Version: $text\n"}
-#
-sub urlget {
-	my $url = shift;
-	my $file = shift;
-	my $status = 0;
-	my $timeout = 1200;
-	local $SIG{PIPE} = 'IGNORE';
-
-	use LWP::UserAgent;
-	my $ua = LWP::UserAgent->new;
-	$ua->timeout(30);
-	my $req = HTTP::Request->new(GET => $url);
-	my $res;
-	my $text;
-
-	($status, $text) = eval {
-		local $SIG{__DIE__} = undef;
-		local $SIG{'ALRM'} = sub {die "Download timeout after $timeout seconds"};
-		alarm($timeout);
-		if ($file) {
-			local $|=1;
-			my $expected_length;
-			my $bytes_received = 0;
-			my $per = 0;
-			my $oldper = 0;
-			open (my $OUT, ">", "$file\.tmp") or return (1, "Unable to open $file\.tmp: $!");
-			flock ($OUT, LOCK_EX);
-			binmode ($OUT);
-			print "...0\%\n";
-			$res = $ua->request($req,
-				sub {
-				my($chunk, $res) = @_;
-				$bytes_received += length($chunk);
-				unless (defined $expected_length) {$expected_length = $res->content_length || 0}
-				if ($expected_length) {
-					my $per = int(100 * $bytes_received / $expected_length);
-					if ((int($per / 5) == $per / 5) and ($per != $oldper)) {
-						print "...$per\%\n";
-						$oldper = $per;
-					}
-				} else {
-					print ".";
-				}
-				print $OUT $chunk;
-			});
-			close ($OUT);
-			print "\n";
-		} else {
-			$res = $ua->request($req);
-		}
-		alarm(0);
-		if ($res->is_success) {
-			if ($file) {
-				rename ("$file\.tmp","$file") or return (1, "Unable to rename $file\.tmp to $file: $!");
-				return (0, $file);
-			} else {
-				return (0, $res->content);
-			}
-		} else {
-			return (1, "Unable to download: ".$res->message);
-		}
-	};
-	alarm(0);
-	if ($@) {
-		return (1, $@);
-	}
-	if ($text) {
-		return ($status,$text);
-	} else {
-		return (1, "Download timeout after $timeout seconds");
-	}
-}
-# end urlget
-###############################################################################
-## start getdownloadserver
-sub getdownloadserver {
-	my @servers;
-	my $downloadservers = "/usr/local/cpanel/whostmgr/docroot/cgi/configserver/cmc/downloadservers";
-	my $chosen;
-	if (-e $downloadservers) {
-		open (my $DOWNLOAD, "<", $downloadservers);
-		flock ($DOWNLOAD, LOCK_SH);
-		my @data = <$DOWNLOAD>;
-		close ($DOWNLOAD);
-		chomp @data;
-		foreach my $line (@data) {
-			if ($line =~ /^download/) {push @servers, $line}
-		}
-##		foreach my $line (slurp($downloadservers)) {
-##			$line =~ s/$cleanreg//g;
-##			if ($line =~ /^download/) {push @servers, $line}
-##		}
-		$chosen = $servers[rand @servers];
-	}
-	if ($chosen eq "") {$chosen = "download.configserver.com"}
-	return $chosen;
-}
-## end getdownloadserver
 ###############################################################################
 
 1;

@@ -2,8 +2,6 @@
 ###############################################################################
 # Copyright (C) 2006-2025 Jonathan Michaelson
 #
-# https://github.com/waytotheweb/scripts
-#
 # This program is free software; you can redistribute it and/or modify it under
 # the terms of the GNU General Public License as published by the Free Software
 # Foundation; either version 3 of the License, or (at your option) any later
@@ -70,7 +68,6 @@ foreach my $pair (@pairs) {
 my $bootstrapcss = "<link rel='stylesheet' href='$images/bootstrap/css/bootstrap.min.css'>";
 my $jqueryjs = "<script src='$images/jquery.min.js'></script>";
 my $bootstrapjs = "<script src='$images/bootstrap/js/bootstrap.min.js'></script>";
-my $fontawesome = "<link rel='stylesheet' href='https://use.fontawesome.com/releases/v5.0.10/css/all.css'>";
 
 my $versionfile = "/etc/cmq/cmqversion.txt";
 open (my $IN, "<", $versionfile) or die $!;
@@ -88,7 +85,6 @@ unless ($FORM{action} eq "tailcmd" or $FORM{action} eq "tracking_detail" or $FOR
 	<meta charset='utf-8'>
 	<meta name='viewport' content='width=device-width, initial-scale=1'>
 	$bootstrapcss
-	$fontawesome
 	<link href='$images/configserver.css' rel='stylesheet' type='text/css'>
 	$jqueryjs
 	$bootstrapjs

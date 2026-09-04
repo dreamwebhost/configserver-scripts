@@ -1,5 +1,24 @@
 ChangeLog:
 
+v3.02  - Removed all automatic version checks and package downloads
+
+	 Removed runtime connections and links to the retired configserver.com
+	 infrastructure. Updates must now be installed manually from a locally
+	 verified package
+
+v3.01  - Security hardening for mailbox, forwarder and filter management
+
+	 HTML-escape user-controlled mail data, file names, directory names and
+	 command output before displaying them in WHM
+
+	 Validate selected domains against /etc/userdomains and reject invalid
+	 account path components
+
+	 Canonicalize mailbox paths beneath the owning account's mail directory to
+	 prevent path traversal and unsafe symlink resolution
+
+	 Drop privileges to the owning cPanel account before reading mailbox
+
 v3.00  - Changed license to GPLv3
 
 v2.08  - Added workaround for iOS issue with bootstrap modals
@@ -33,7 +52,7 @@ v2.00  - Modify UI to use cPanel templates for v64+
 
 	 General code improvements
 
-v1.37  - UI HTML changes 
+v1.37  - UI HTML changes
 
 v1.36  - Redesigned UI based on Bootstrap
 
@@ -86,12 +105,12 @@ v1.23  - Fixed Up button
 v1.22  - Sanitised user data input to prevent running unauthorised commands via
          the UI. A user would require root access to exploit this, so risk is
 	 low
-	 
+
 	 Changed backtick calls to use Open3
 
 v1.21  - Added support for cPanel v11.38.1+ AppConfig addon registration
 
-         Switched to using /etc/userdomains from /etc/localdomains + 
+         Switched to using /etc/userdomains from /etc/localdomains +
 	 /etc/remotedomains to give more accurate domain/account listings
 
 	 NOTE: In accordance with the new conventions for v11.38.1+ AppConfig

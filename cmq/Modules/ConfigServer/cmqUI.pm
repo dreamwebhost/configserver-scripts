@@ -1,8 +1,6 @@
 ###############################################################################
 # Copyright (C) 2006-2025 Jonathan Michaelson
 #
-# https://github.com/waytotheweb/scripts
-#
 # This program is free software; you can redistribute it and/or modify it under
 # the terms of the GNU General Public License as published by the Free Software
 # Foundation; either version 3 of the License, or (at your option) any later
@@ -25,7 +23,7 @@ use IPC::Open3;
 use Fcntl qw(:DEFAULT :flock);
 use Storable();
 
-our ($images, $myv, $script, %FORM, %queue, $expcnt, %cookie, $downloadserver,
+our ($images, $myv, $script, %FORM, %queue, $expcnt, %cookie,
      $script_da, @config, $eximmainlog, $localdomains);
 #
 ###############################################################################
@@ -38,8 +36,11 @@ sub displayUI {
 	$myv = shift;
 	my $sessioncode = shift;
 	%FORM = %{$formref};
+	if (defined($FORM{action_id}) and $FORM{action_id} =~ /\A(delete|deliver):([A-Za-z0-9][A-Za-z0-9\-]{0,127})\z/) {
+		$FORM{action} = $1;
+		$FORM{id} = $2;
+	}
 
-	$downloadserver = &getdownloadserver;
 	$eximmainlog = "/var/log/exim_mainlog";
 	$localdomains = "/etc/localdomains";
 	if (-e "/usr/local/directadmin/directadmin") {
@@ -73,16 +74,53 @@ sub displayUI {
 		unlink "/etc/cmq/cmqstore";
 	}
 
-	if ($FORM{id} ne "" and $FORM{id} =~ /[^\w\-]/) {
-		print "Invalid email ID [$FORM{id}]";
+	if (&state_changing_action($FORM{action}) and !&is_post_request()) {
+		print "This action requires a POST request";
 	}
-	elsif ($FORM{bcc} ne "" and $FORM{bcc} =~ /[^a-zA-Z0-9\-\_\.\@\+]/) {
-		print "Invalid email address [$FORM{bcc}]";
+	elsif ($FORM{id} ne "" and !&valid_message_id($FORM{id})) {
+		print "Invalid email ID [".&html_escape($FORM{id})."]";
+	}
+	elsif ($FORM{bcc} ne "" and ($FORM{bcc} !~ /\A[A-Za-z0-9_+.-]+\@[A-Za-z0-9.-]+\z/ or length($FORM{bcc}) > 254)) {
+		print "Invalid email address [".&html_escape($FORM{bcc})."]";
+	}
+	elsif ($FORM{config} ne "" and $FORM{config} !~ /\A(?:exim|ms)(?:_\d{1,10})?\z/) {
+		print "Invalid queue configuration [".&html_escape($FORM{config})."]";
+	}
+	elsif ($FORM{page} ne "" and $FORM{page} !~ /\A\d{1,6}\z/) {
+		print "Invalid page [".&html_escape($FORM{page})."]";
+	}
+	elsif ($FORM{age} ne "" and $FORM{age} !~ /\A(?:[1-9]|[1-5]\d|60)\z/) {
+		print "Invalid message age";
+	}
+	elsif ($FORM{unit} ne "" and $FORM{unit} !~ /\A(?:minutes|hours|days)\z/) {
+		print "Invalid age unit";
+	}
+	elsif ($FORM{queue} ne "" and $FORM{queue} !~ /\A(?:in|out|inout)\z/) {
+		print "Invalid queue selection";
+	}
+	elsif ($FORM{field} ne "" and $FORM{field} !~ /\A(?:to|from|subject|header|body|ID)\z/) {
+		print "Invalid search field";
+	}
+	elsif ($FORM{searchtype} ne "" and $FORM{searchtype} !~ /\A(?:contain|begin with|end with|equal)\z/) {
+		print "Invalid search type";
+	}
+	elsif ($FORM{dir} ne "" and $FORM{dir} !~ /\A[ad]\z/) {
+		print "Invalid sort direction";
+	}
+	elsif (length($FORM{text}) > 512) {
+		print "Search text is too long";
+	}
+	elsif ($FORM{action} eq "mass" and $FORM{do} ne "Delete Selected" and $FORM{do} ne "Bcc to:") {
+		print "Invalid bulk action";
+	}
+	elsif ($FORM{action} eq "mass" and $FORM{do} eq "Bcc to:" and $FORM{bcc} eq "") {
+		print "A Bcc address is required";
 	}
 	elsif (($FORM{action} eq "View Emails") or ($FORM{action} eq "Delete Emails")) {
-		my $formurl = "?age=$FORM{age}&action=$FORM{action}&subject=$FORM{subject}&links=$FORM{links}&unit=$FORM{unit}&bounce=$FORM{bounce}&frozen=$FORM{frozen}&bool=$FORM{bool}&queue=$FORM{queue}&field=$FORM{field}&config=$FORM{config}&searchtype=$FORM{searchtype}&also=$FORM{also}&text=$FORM{text}&search=$FORM{search}&dir=$FORM{dir}";
-		if (defined $FORM{page}) {$formurl .= "&page=$FORM{page}"}
-		if (defined $FORM{refresh}) {$formurl .= "&refresh=$FORM{refresh}"}
+		my $formurl = &form_url(qw(age action subject links unit bounce frozen bool queue field config searchtype also text search dir));
+		if (defined $FORM{page}) {$formurl .= "&amp;page=".&uri_escape($FORM{page})}
+		if (defined $FORM{refresh}) {$formurl .= "&amp;refresh=".&uri_escape($FORM{refresh})}
+		my $search_pattern = quotemeta($FORM{text});
 
 		if ($FORM{queue} eq "in") {
 			print "<h3>$viewqueue (Incoming) - $FORM{action}</h3>\n";
@@ -151,21 +189,21 @@ sub displayUI {
 				}
 				if ($FORM{search} and $show) {
 					$show = 0;
-					if (($FORM{field} eq "from") and ($FORM{searchtype} eq "contain") and ($FORM{bool}) and ($queue{$key}{from} =~ /$FORM{text}/i)) {$show = 1}
-					elsif (($FORM{field} eq "from") and ($FORM{searchtype} eq "contain") and (!$FORM{bool}) and ($queue{$key}{from} !~ /$FORM{text}/i)) {$show = 1}
-					elsif (($FORM{field} eq "from") and ($FORM{searchtype} eq "begin with") and ($FORM{bool}) and ($queue{$key}{from} =~ /^$FORM{text}/i)) {$show = 1}
-					elsif (($FORM{field} eq "from") and ($FORM{searchtype} eq "begin with") and (!$FORM{bool}) and ($queue{$key}{from} !~ /^$FORM{text}/i)) {$show = 1}
-					elsif (($FORM{field} eq "from") and ($FORM{searchtype} eq "end with") and ($FORM{bool}) and ($queue{$key}{from} =~ /$FORM{text}$/i)) {$show = 1}
-					elsif (($FORM{field} eq "from") and ($FORM{searchtype} eq "end with") and (!$FORM{bool}) and ($queue{$key}{from} !~ /$FORM{text}$/i)) {$show = 1}
+					if (($FORM{field} eq "from") and ($FORM{searchtype} eq "contain") and ($FORM{bool}) and ($queue{$key}{from} =~ /$search_pattern/i)) {$show = 1}
+					elsif (($FORM{field} eq "from") and ($FORM{searchtype} eq "contain") and (!$FORM{bool}) and ($queue{$key}{from} !~ /$search_pattern/i)) {$show = 1}
+					elsif (($FORM{field} eq "from") and ($FORM{searchtype} eq "begin with") and ($FORM{bool}) and ($queue{$key}{from} =~ /^$search_pattern/i)) {$show = 1}
+					elsif (($FORM{field} eq "from") and ($FORM{searchtype} eq "begin with") and (!$FORM{bool}) and ($queue{$key}{from} !~ /^$search_pattern/i)) {$show = 1}
+					elsif (($FORM{field} eq "from") and ($FORM{searchtype} eq "end with") and ($FORM{bool}) and ($queue{$key}{from} =~ /$search_pattern$/i)) {$show = 1}
+					elsif (($FORM{field} eq "from") and ($FORM{searchtype} eq "end with") and (!$FORM{bool}) and ($queue{$key}{from} !~ /$search_pattern$/i)) {$show = 1}
 					elsif (($FORM{field} eq "from") and ($FORM{searchtype} eq "equal") and ($FORM{bool}) and ($queue{$key}{from} eq $FORM{text})) {$show = 1}
 					elsif (($FORM{field} eq "from") and ($FORM{searchtype} eq "equal") and (!$FORM{bool}) and ($queue{$key}{from} ne $FORM{text})) {$show = 1}
 
-					if (($FORM{field} eq "ID") and ($FORM{searchtype} eq "contain") and ($FORM{bool}) and ($key =~ /$FORM{text}/i)) {$show = 1}
-					elsif (($FORM{field} eq "ID") and ($FORM{searchtype} eq "contain") and (!$FORM{bool}) and ($key !~ /$FORM{text}/i)) {$show = 1}
-					elsif (($FORM{field} eq "ID") and ($FORM{searchtype} eq "begin with") and ($FORM{bool}) and ($key =~ /^$FORM{text}/i)) {$show = 1}
-					elsif (($FORM{field} eq "ID") and ($FORM{searchtype} eq "begin with") and (!$FORM{bool}) and ($key !~ /^$FORM{text}/i)) {$show = 1}
-					elsif (($FORM{field} eq "ID") and ($FORM{searchtype} eq "end with") and ($FORM{bool}) and ($key =~ /$FORM{text}$/i)) {$show = 1}
-					elsif (($FORM{field} eq "ID") and ($FORM{searchtype} eq "end with") and (!$FORM{bool}) and ($key !~ /$FORM{text}$/i)) {$show = 1}
+					if (($FORM{field} eq "ID") and ($FORM{searchtype} eq "contain") and ($FORM{bool}) and ($key =~ /$search_pattern/i)) {$show = 1}
+					elsif (($FORM{field} eq "ID") and ($FORM{searchtype} eq "contain") and (!$FORM{bool}) and ($key !~ /$search_pattern/i)) {$show = 1}
+					elsif (($FORM{field} eq "ID") and ($FORM{searchtype} eq "begin with") and ($FORM{bool}) and ($key =~ /^$search_pattern/i)) {$show = 1}
+					elsif (($FORM{field} eq "ID") and ($FORM{searchtype} eq "begin with") and (!$FORM{bool}) and ($key !~ /^$search_pattern/i)) {$show = 1}
+					elsif (($FORM{field} eq "ID") and ($FORM{searchtype} eq "end with") and ($FORM{bool}) and ($key =~ /$search_pattern$/i)) {$show = 1}
+					elsif (($FORM{field} eq "ID") and ($FORM{searchtype} eq "end with") and (!$FORM{bool}) and ($key !~ /$search_pattern$/i)) {$show = 1}
 					elsif (($FORM{field} eq "ID") and ($FORM{searchtype} eq "equal") and ($FORM{bool}) and ($key eq $FORM{text})) {$show = 1}
 					elsif (($FORM{field} eq "ID") and ($FORM{searchtype} eq "equal") and (!$FORM{bool}) and ($key ne $FORM{text})) {$show = 1}
 
@@ -173,12 +211,12 @@ sub displayUI {
 						foreach my $address (split(/\,/,$queue{$key}{to})) {
 							$address =~ s/D //g;
 							$address =~ s/\+D //g;
-							if (($FORM{searchtype} eq "contain") and ($FORM{bool}) and ($address =~ /$FORM{text}/i)) {$show = 1}
-							elsif (($FORM{searchtype} eq "contain") and (!$FORM{bool}) and ($address !~ /$FORM{text}/i)) {$show = 1}
-							elsif (($FORM{searchtype} eq "begin with") and ($FORM{bool}) and ($address =~ /^$FORM{text}/i)) {$show = 1}
-							elsif (($FORM{searchtype} eq "begin with") and (!$FORM{bool}) and ($address !~ /^$FORM{text}/i)) {$show = 1}
-							elsif (($FORM{searchtype} eq "end with") and ($FORM{bool}) and ($address =~ /$FORM{text}$/i)) {$show = 1}
-							elsif (($FORM{searchtype} eq "end with") and (!$FORM{bool}) and ($address !~ /$FORM{text}$/i)) {$show = 1}
+							if (($FORM{searchtype} eq "contain") and ($FORM{bool}) and ($address =~ /$search_pattern/i)) {$show = 1}
+							elsif (($FORM{searchtype} eq "contain") and (!$FORM{bool}) and ($address !~ /$search_pattern/i)) {$show = 1}
+							elsif (($FORM{searchtype} eq "begin with") and ($FORM{bool}) and ($address =~ /^$search_pattern/i)) {$show = 1}
+							elsif (($FORM{searchtype} eq "begin with") and (!$FORM{bool}) and ($address !~ /^$search_pattern/i)) {$show = 1}
+							elsif (($FORM{searchtype} eq "end with") and ($FORM{bool}) and ($address =~ /$search_pattern$/i)) {$show = 1}
+							elsif (($FORM{searchtype} eq "end with") and (!$FORM{bool}) and ($address !~ /$search_pattern$/i)) {$show = 1}
 							elsif (($FORM{searchtype} eq "equal") and ($FORM{bool}) and ($address eq $FORM{text})) {$show = 1}
 							elsif (($FORM{searchtype} eq "equal") and (!$FORM{bool}) and ($address ne $FORM{text})) {$show = 1}
 							if ($show) {last}
@@ -195,12 +233,12 @@ sub displayUI {
 							my (undef,$field,$value) = split(/\s+/,$line,3);
 							if ($field =~ /subject:/i) {$subject = $value;}
 						}
-						if (($FORM{searchtype} eq "contain") and ($FORM{bool}) and ($subject =~ /$FORM{text}/i)) {$show = 1}
-						elsif (($FORM{searchtype} eq "contain") and (!$FORM{bool}) and ($subject !~ /$FORM{text}/i)) {$show = 1}
-						elsif (($FORM{searchtype} eq "begin with") and ($FORM{bool}) and ($subject =~ /^$FORM{text}/i)) {$show = 1}
-						elsif (($FORM{searchtype} eq "begin with") and (!$FORM{bool}) and ($subject !~ /^$FORM{text}/i)) {$show = 1}
-						elsif (($FORM{searchtype} eq "end with") and ($FORM{bool}) and ($subject =~ /$FORM{text}$/i)) {$show = 1}
-						elsif (($FORM{searchtype} eq "end with") and (!$FORM{bool}) and ($subject !~ /$FORM{text}$/i)) {$show = 1}
+						if (($FORM{searchtype} eq "contain") and ($FORM{bool}) and ($subject =~ /$search_pattern/i)) {$show = 1}
+						elsif (($FORM{searchtype} eq "contain") and (!$FORM{bool}) and ($subject !~ /$search_pattern/i)) {$show = 1}
+						elsif (($FORM{searchtype} eq "begin with") and ($FORM{bool}) and ($subject =~ /^$search_pattern/i)) {$show = 1}
+						elsif (($FORM{searchtype} eq "begin with") and (!$FORM{bool}) and ($subject !~ /^$search_pattern/i)) {$show = 1}
+						elsif (($FORM{searchtype} eq "end with") and ($FORM{bool}) and ($subject =~ /$search_pattern$/i)) {$show = 1}
+						elsif (($FORM{searchtype} eq "end with") and (!$FORM{bool}) and ($subject !~ /$search_pattern$/i)) {$show = 1}
 						elsif (($FORM{searchtype} eq "equal") and ($FORM{bool}) and ($subject eq $FORM{text})) {$show = 1}
 						elsif (($FORM{searchtype} eq "equal") and (!$FORM{bool}) and ($subject ne $FORM{text})) {$show = 1}
 					}
@@ -211,12 +249,12 @@ sub displayUI {
 						waitpid ($cmdpid, 0);
 						chomp @data;
 						my $header = join("\n",@data);
-						if (($FORM{searchtype} eq "contain") and ($FORM{bool}) and ($header =~ /$FORM{text}/i)) {$show = 1}
-						elsif (($FORM{searchtype} eq "contain") and (!$FORM{bool}) and ($header !~ /$FORM{text}/i)) {$show = 1}
-						elsif (($FORM{searchtype} eq "begin with") and ($FORM{bool}) and ($header =~ /^$FORM{text}/i)) {$show = 1}
-						elsif (($FORM{searchtype} eq "begin with") and (!$FORM{bool}) and ($header !~ /^$FORM{text}/i)) {$show = 1}
-						elsif (($FORM{searchtype} eq "end with") and ($FORM{bool}) and ($header =~ /$FORM{text}$/i)) {$show = 1}
-						elsif (($FORM{searchtype} eq "end with") and (!$FORM{bool}) and ($header !~ /$FORM{text}$/i)) {$show = 1}
+						if (($FORM{searchtype} eq "contain") and ($FORM{bool}) and ($header =~ /$search_pattern/i)) {$show = 1}
+						elsif (($FORM{searchtype} eq "contain") and (!$FORM{bool}) and ($header !~ /$search_pattern/i)) {$show = 1}
+						elsif (($FORM{searchtype} eq "begin with") and ($FORM{bool}) and ($header =~ /^$search_pattern/i)) {$show = 1}
+						elsif (($FORM{searchtype} eq "begin with") and (!$FORM{bool}) and ($header !~ /^$search_pattern/i)) {$show = 1}
+						elsif (($FORM{searchtype} eq "end with") and ($FORM{bool}) and ($header =~ /$search_pattern$/i)) {$show = 1}
+						elsif (($FORM{searchtype} eq "end with") and (!$FORM{bool}) and ($header !~ /$search_pattern$/i)) {$show = 1}
 						elsif (($FORM{searchtype} eq "equal") and ($FORM{bool}) and ($header eq $FORM{text})) {$show = 1}
 						elsif (($FORM{searchtype} eq "equal") and (!$FORM{bool}) and ($header ne $FORM{text})) {$show = 1}
 					}
@@ -227,12 +265,12 @@ sub displayUI {
 						waitpid ($cmdpid, 0);
 						chomp @data;
 						my $body = join("\n",@data);
-						if (($FORM{searchtype} eq "contain") and ($FORM{bool}) and ($body =~ /$FORM{text}/i)) {$show = 1}
-						elsif (($FORM{searchtype} eq "contain") and (!$FORM{bool}) and ($body !~ /$FORM{text}/i)) {$show = 1}
-						elsif (($FORM{searchtype} eq "begin with") and ($FORM{bool}) and ($body =~ /^$FORM{text}/i)) {$show = 1}
-						elsif (($FORM{searchtype} eq "begin with") and (!$FORM{bool}) and ($body !~ /^$FORM{text}/i)) {$show = 1}
-						elsif (($FORM{searchtype} eq "end with") and ($FORM{bool}) and ($body =~ /$FORM{text}$/i)) {$show = 1}
-						elsif (($FORM{searchtype} eq "end with") and (!$FORM{bool}) and ($body !~ /$FORM{text}$/i)) {$show = 1}
+						if (($FORM{searchtype} eq "contain") and ($FORM{bool}) and ($body =~ /$search_pattern/i)) {$show = 1}
+						elsif (($FORM{searchtype} eq "contain") and (!$FORM{bool}) and ($body !~ /$search_pattern/i)) {$show = 1}
+						elsif (($FORM{searchtype} eq "begin with") and ($FORM{bool}) and ($body =~ /^$search_pattern/i)) {$show = 1}
+						elsif (($FORM{searchtype} eq "begin with") and (!$FORM{bool}) and ($body !~ /^$search_pattern/i)) {$show = 1}
+						elsif (($FORM{searchtype} eq "end with") and ($FORM{bool}) and ($body =~ /$search_pattern$/i)) {$show = 1}
+						elsif (($FORM{searchtype} eq "end with") and (!$FORM{bool}) and ($body !~ /$search_pattern$/i)) {$show = 1}
 						elsif (($FORM{searchtype} eq "equal") and ($FORM{bool}) and ($body eq $FORM{text})) {$show = 1}
 						elsif (($FORM{searchtype} eq "equal") and (!$FORM{bool}) and ($body ne $FORM{text})) {$show = 1}
 					}
@@ -245,18 +283,19 @@ sub displayUI {
 		my $pagination = "";
 		my $offsetrows = 50;
 		my $gtotal = scalar(@messages);
-		$formurl = "?age=$FORM{age}&action=$FORM{action}&subject=$FORM{subject}&links=$FORM{links}&unit=$FORM{unit}&bounce=$FORM{bounce}&frozen=$FORM{frozen}&bool=$FORM{bool}&queue=$FORM{queue}&field=$FORM{field}&config=$FORM{config}&searchtype=$FORM{searchtype}&also=$FORM{also}&text=$FORM{text}&search=$FORM{search}&dir=$FORM{dir}";
+		$formurl = &form_url(qw(age action subject links unit bounce frozen bool queue field config searchtype also text search dir));
 		if ($FORM{action} eq "View Emails" and defined $FORM{page}) {
 			my $from = 0;
 			my $to = $offsetrows - 1;
 			my $offset = $FORM{page};
+			my $pages = int( ($gtotal - 1) / $offsetrows);
+			if ($offset > $pages) {$offset = $pages}
 
 			$from = ($offset) * $offsetrows;
 			$to = (($offset) * $offsetrows) + $offsetrows - 1;
 			if ($to > $gtotal) {$to = $gtotal}
 			@messages = @messages[$from..$to];
 
-			my $pages = int( ($gtotal - 1) / $offsetrows);
 			my $start = 0;
 			my $end = 9;
 			if ($pages < 10) {$end = $pages}
@@ -274,19 +313,19 @@ sub displayUI {
 				$pagination .= "<span class='dropdown-toggle' data-toggle='dropdown' style='cursor: pointer;'>Jump <span class='caret'></span></span>\n";
 				$pagination .= "<ul class='dropdown-menu'>\n";
 				for (1..$drop) {
-					$pagination .= "<li><a href='$formurl&page=".($_*$offsetrows - 1)."' title='Jump to page'>".($_*$offsetrows)."</a></li>\n";
+					$pagination .= "<li><a href='$formurl&amp;page=".($_*$offsetrows - 1)."' title='Jump to page'>".($_*$offsetrows)."</a></li>\n";
 				}
 				$pagination .= "</ul></span></li>\n";
 			}
-			if ($start > 0) {$pagination .= "<li><a href='$formurl&page=0' title='Go to page'><span class='glyphicon glyphicon-chevron-left'></span> 1</a></li>\n"}
+			if ($start > 0) {$pagination .= "<li><a href='$formurl&amp;page=0' title='Go to page'><span class='glyphicon glyphicon-chevron-left'></span> 1</a></li>\n"}
 			for ($start..$end) {
 				my $x = $_;
 				my $active;
 				if ($x == $offset) {$active = " class='active'"}
-				$pagination .= "<li$active><a href='$formurl&page=$x' title='Go to page'>".($x+1)."</a></li>\n";
+				$pagination .= "<li$active><a href='$formurl&amp;page=$x' title='Go to page'>".($x+1)."</a></li>\n";
 			}
 			if ($end < $pages) {
-				$pagination .= "<li><a href='$formurl&page=$pages' title='Go to page'>".($pages+1)." <span class='glyphicon glyphicon-chevron-right'></span></i></a></li>\n";
+				$pagination .= "<li><a href='$formurl&amp;page=$pages' title='Go to page'>".($pages+1)." <span class='glyphicon glyphicon-chevron-right'></span></i></a></li>\n";
 			}
 			$pagination .= "<li><a>Results: <code>$gtotal</code></a></li>\n";
 			$pagination .= "</ul>\n";
@@ -310,24 +349,24 @@ sub displayUI {
 			print "		}\n";
 			print "	}\n";
 			print "}\n</script>\n";
-			print "<form action='$script' method='post' name='listmail'><input type='hidden' name='action' value='mass'><input type='hidden' name='config' value='$FORM{config}'>\n";
+			print "<form action='$script' method='post' name='listmail'><input type='hidden' name='action' value='mass'><input type='hidden' name='config' value='".&html_escape($FORM{config})."'>\n";
 	#		if ($expcnt > 0) {
 	#			print "<p><a href='javascript:expandO(\"expand\",$expcnt);'><img valign='absmiddle' src='$images/plus.png' name='i$divcnt' border='0' width='12' height='12'> Expand All</a>\n";
 	#			print " <a href='javascript:expandO(\"collapse\",$expcnt);'><img valign='absmiddle' src='$images/minus.png' name='i$divcnt' border='0' width='12' height='12'> Collapse All</a></p>\n";
 	#		}
 			if (defined($FORM{page})) {
 				print "<p>\n";
-				print " <a class='btn btn-default' href='$formurl&refresh=1&page=0'><span class='glyphicon glyphicon-refresh'></span> Refresh Queue Cache</a> \n";
+				print " <a class='btn btn-default' href='$formurl&amp;refresh=1&amp;page=0'><span class='glyphicon glyphicon-refresh'></span> Refresh Queue Cache</a> \n";
 				if ($gtotal > $offsetrows) {
-					print "<a class='btn btn-default' href='$formurl&refresh=2&page=0'><span class='glyphicon glyphicon-list'></span> No Pagination</a>\n";
+					print "<a class='btn btn-default' href='$formurl&amp;refresh=2&amp;page=0'><span class='glyphicon glyphicon-list'></span> No Pagination</a>\n";
 				}
 				print "</p>\n";
 				print $pagination;
 			}
 			print "<table class='table table-striped table-bordered'>\n";
-			my $formurl = "?age=$FORM{age}&action=$FORM{action}&subject=$FORM{subject}&links=$FORM{links}&unit=$FORM{unit}&bounce=$FORM{bounce}&frozen=$FORM{frozen}&bool=$FORM{bool}&queue=$FORM{queue}&field=$FORM{field}&config=$FORM{config}&searchtype=$FORM{searchtype}&also=$FORM{also}&text=$FORM{text}&search=$FORM{search}";
-			my $age = "<a href='${formurl}&dir=d'><span class='glyphicon glyphicon-sort-by-order' title='Sort Descending'></span></a>";
-			if ($FORM{dir} eq "d") {$age = "<a href='${formurl}&dir=a' title='Sort Ascending'><span class='glyphicon glyphicon-sort-by-order-alt'></span></a>"}
+			my $formurl = &form_url(qw(age action subject links unit bounce frozen bool queue field config searchtype also text search));
+			my $age = "<a href='${formurl}&amp;dir=d'><span class='glyphicon glyphicon-sort-by-order' title='Sort Descending'></span></a>";
+			if ($FORM{dir} eq "d") {$age = "<a href='${formurl}&amp;dir=a' title='Sort Ascending'><span class='glyphicon glyphicon-sort-by-order-alt'></span></a>"}
 			print "<thead><tr><th><input type='checkbox' name='checkall' OnClick='checkme()'></th><th>Email ID</th><th>&nbsp;</th><th style='white-space:nowrap'>Age $age</th><th>Size</th><th>From</th><th>To</th>";
 			if ($FORM{subject}) {print "<th>Subject</th>"}
 			print "</tr></thead>";
@@ -337,26 +376,25 @@ sub displayUI {
 		}
 
 		foreach my $key (@messages) {
-			if ($key eq "" or $key eq "0") {next}
+			if (!&valid_message_id($key)) {next}
+			my $key_html = &html_escape($key);
+			my $key_uri = &uri_escape($key);
+			my $config_uri = &uri_escape($FORM{config});
 			if (($queue{$key}{time} eq "") or ($queue{$key}{size} eq "")) {
 				if ($FORM{action} eq "View Emails") {
-					print "<tr><td>&nbsp;</td><td><span>$key</span></td>\n";
-					print "<td colspan='5'>Broken spool file - removed</td></tr>\n";
+					print "<tr><td>&nbsp;</td><td><span>$key_html</span></td>\n";
+					print "<td colspan='5'>Unable to parse spool entry - skipped</td></tr>\n";
 				} else {
-					print "<tr><td><span>$key</span></td>\n";
-					print "<td>Broken spool file - removed</td></tr>\n";
+					print "<tr><td><span>$key_html</span></td>\n";
+					print "<td>Unable to parse spool entry - skipped</td></tr>\n";
 				}
-				my ($childin, $childout);
-				my $cmdpid = open3($childin, $childout, $childout, "/usr/sbin/exim", @config, "-Mrm", $key);
-				my @data = <$childout>;
-				waitpid ($cmdpid, 0);
 				next;
 			}
 			if ($FORM{action} eq "View Emails") {
-				my $to = $queue{$key}{to};
+				my $to = &html_escape($queue{$key}{to});
 				if ($to =~ /\,/) {
 					$divcnt++;
-					my @tos = split(/\,/,$to);
+					my @tos = map {&html_escape($_)} split(/\,/,$queue{$key}{to});
 					$to = "<span class='mhead'><a href='javascript:showMenu($divcnt);'><img valign='absmiddle' src='$images/plus.png' name='i$divcnt' border='0' width='12' height='12'></a>$tos[0]\n</span>\n<span class='submenu' id='s$divcnt'>\n";
 					for (my $x = 1;$x < @tos;$x++) {
 						$to .= "$tos[$x]<br>\n";
@@ -366,29 +404,25 @@ sub displayUI {
 				my $frozen;
 				if ($queue{$key}{frozen} eq "*") {$frozen = "<span class='glyphicon glyphicon-certificate' title='frozen'></span>"}
 
-				print "<tr id='$key'><td style='white-space: nowrap;'><input type='checkbox' name='del_$key'> ".(($total+1) + $FORM{page}*$offsetrows)."</td><td style='white-space: nowrap;'>\n";
+				print "<tr id='$key_html'><td style='white-space: nowrap;'><input type='checkbox' name='del_$key_html'> ".(($total+1) + $FORM{page}*$offsetrows)."</td><td style='white-space: nowrap;'>\n";
 				if ($FORM{links}) {
-					print "<a class='btn btn-default' href='$script?action=view&id=$key&config=$FORM{config}' title='View Email' target='_blank'>$key</a> $frozen</td>\n";
+					print "<a class='btn btn-default' href='$script?action=view&amp;id=$key_uri&amp;config=$config_uri' title='View Email' target='_blank'>$key_html</a> $frozen</td>\n";
 				} else {
-					print "<a class='btn btn-default modalButton' data-toggle='modal' data-src='$script?action=view&id=$key&config=$FORM{config}' data-height='500px' data-width='100%' data-target='#myModal' title='View Email'>$key</a> $frozen</td>\n";
+					print "<a class='btn btn-default modalButton' data-toggle='modal' data-src='$script?action=view&amp;id=$key_uri&amp;config=$config_uri' data-height='500px' data-width='100%' data-target='#myModal' title='View Email'>$key_html</a> $frozen</td>\n";
 				}
 				print "<td nowrap>\n";
+				print "<button class='btn btn-danger' type='submit' name='action_id' value='delete:$key_html' formmethod='post' formtarget='_blank' title='Delete'><span class='glyphicon glyphicon-remove-circle'></span></button> \n";
+				print "<button class='btn btn-primary' type='submit' name='action_id' value='deliver:$key_html' formmethod='post' formtarget='_blank' title='Deliver'><span class='glyphicon glyphicon-repeat'></span></button> \n";
 				if ($FORM{links}) {
-					print "<a class='btn btn-danger' href='$script?action=delete&id=$key&config=$FORM{config}' target='_blank' title='Delete' onclick='\$(\"#$key\").hide()'><span class='glyphicon glyphicon-remove-circle'></span></a> \n";
+					print "<a class='btn btn-info' href='$script?action=viewdelivery&amp;id=$key_uri&amp;config=$config_uri' target='_blank' title='Delivery Log'><span class='glyphicon glyphicon-search'></span></a></td>\n";
 				} else {
-					print "<a class='btn btn-danger modalButton' data-toggle='modal' data-src='$script?action=delete&id=$key&config=$FORM{config}' data-height='500px' data-width='100%' data-target='#myModal' title='Delete' onclick='\$(\"#$key\").hide()'><span class='glyphicon glyphicon-remove-circle'></span></a> \n";
+					print "<a class='btn btn-info modalButton' data-toggle='modal' data-src='$script?action=viewdelivery&amp;id=$key_uri&amp;config=$config_uri' data-height='500px' data-width='100%' data-target='#myModal' title='Delivery Log'><span class='glyphicon glyphicon-search'></span></a></td>\n";
 				}
-				if ($FORM{links}) {
-					print "<a class='btn btn-primary' href='$script?action=deliver&id=$key&config=$FORM{config}' target='_blank' title='Deliver'><span class='glyphicon glyphicon-repeat'></span></a> \n";
-				} else {
-					print "<a class='btn btn-primary modalButton' data-toggle='modal' data-src='$script?action=deliver&id=$key&config=$FORM{config}' data-height='500px' data-width='100%' data-target='#myModal' title='Deliver'><span class='glyphicon glyphicon-repeat'></span></a> \n";
-				}
-				if ($FORM{links}) {
-					print "<a class='btn btn-info' href='$script?action=viewdelivery&id=$key&config=$FORM{config}' target='_blank' title='Delivery Log'><span class='glyphicon glyphicon-search'></span></a></td>\n";
-				} else {
-					print "<a class='btn btn-info modalButton' data-toggle='modal' data-src='$script?action=viewdelivery&id=$key&config=$FORM{config}' data-height='500px' data-width='100%' data-target='#myModal' title='Delivery Log'><span class='glyphicon glyphicon-search'></span></a></td>\n";
-				}
-				print "<td>$queue{$key}{time}</td><td>$queue{$key}{size}</td><td class='nooverflow' title='$queue{$key}{from}'>$queue{$key}{from}</td><td class='nooverflow' title='$queue{$key}{to}'>$to</td>";
+				my $time_html = &html_escape($queue{$key}{time});
+				my $size_html = &html_escape($queue{$key}{size});
+				my $from_html = &html_escape($queue{$key}{from});
+				my $to_title = &html_escape($queue{$key}{to});
+				print "<td>$time_html</td><td>$size_html</td><td class='nooverflow' title='$from_html'>$from_html</td><td class='nooverflow' title='$to_title'>$to</td>";
 
 				if ($FORM{subject}) {
 					my $subject = "[no subject/subject not found]";
@@ -401,8 +435,7 @@ sub displayUI {
 						my (undef,$field,$value) = split(/\s+/,$line,3);
 						if ($field =~ /subject:/i) {$subject = $value;}
 					}
-					$subject =~ s/>/&gt;/g;
-					$subject =~ s/</&lt;/g;
+					$subject = &html_escape($subject);
 					print "<td class='nooverflow' title='$subject'>$subject</td>";
 				}
 
@@ -410,14 +443,14 @@ sub displayUI {
 			}
 			elsif ($FORM{action} eq "Delete Emails") {
 				my $cnt = $total + 1;
-				print "<tr><td><span>$cnt</span></td><td><span>$key</span></td>\n";
+				print "<tr><td><span>$cnt</span></td><td><span>$key_html</span></td>\n";
 				print "<td>";
 				my ($childin, $childout);
 				my $cmdpid = open3($childin, $childout, $childout, "/usr/sbin/exim", @config, "-Mrm", $key);
 				my @data = <$childout>;
 				waitpid ($cmdpid, 0);
 				chomp @data;
-				print $data[-1];
+				print &html_escape($data[-1]);
 				print "</td></tr>\n";
 			}
 			$total++;
@@ -486,9 +519,7 @@ sub displayUI {
 		waitpid ($cmdpid, 0);
 		chomp @data;
 		foreach my $line (@data) {
-			$line =~ s/>/&gt;/g;
-			$line =~ s/</&lt;/g;
-			print $line."\n";
+			print &html_escape($line)."\n";
 		}
 		print "</pre></div>\n";
 		print "</div>\n";
@@ -501,9 +532,7 @@ sub displayUI {
 		waitpid ($cmdpid, 0);
 		chomp @data;
 		foreach my $line (@data) {
-			$line =~ s/>/&gt;/g;
-			$line =~ s/</&lt;/g;
-			print $line."\n";
+			print &html_escape($line)."\n";
 		}
 		print "</pre></div>\n";
 		print "</div>\n";
@@ -518,9 +547,7 @@ sub displayUI {
 		waitpid ($cmdpid, 0);
 		chomp @data;
 		foreach my $line (@data) {
-			$line =~ s/>/&gt;/g;
-			$line =~ s/</&lt;/g;
-			print $line."\n";
+			print &html_escape($line)."\n";
 		}
 		print "</pre></td></tr>\n";
 		print "</table>\n";
@@ -535,9 +562,7 @@ sub displayUI {
 		waitpid ($cmdpid, 0);
 		chomp @data;
 		foreach my $line (@data) {
-			$line =~ s/>/&gt;/g;
-			$line =~ s/</&lt;/g;
-			print $line."\n";
+			print &html_escape($line)."\n";
 		}
 		print "</pre></td></tr>\n";
 		print "</table>\n";
@@ -552,9 +577,7 @@ sub displayUI {
 		waitpid ($cmdpid, 0);
 		chomp @data;
 		foreach my $line (@data) {
-			$line =~ s/>/&gt;/g;
-			$line =~ s/</&lt;/g;
-			print $line."\n";
+			print &html_escape($line)."\n";
 		}
 		print "</pre></td></tr>\n";
 		print "</table>\n";
@@ -565,15 +588,15 @@ sub displayUI {
 		if ($FORM{do} ne "Bcc to:") {
 			print "<h2>Delete Selected</h2>\n";
 		} else {
-			print "<h2>Bcc Selected to $FORM{bcc}</h2>\n";
+			print "<h2>Bcc Selected to ".&html_escape($FORM{bcc})."</h2>\n";
 		}
 		print "<table class='table table-striped table-bordered'>\n";
 		print "<thead><tr><th>Email ID</th><th>Response</th></tr></thead>\n";
 		foreach my $key (keys %FORM) {
 			my $id = 0;
-			if ($key =~ /^del_(.*)/) {$id = $1}
+			if ($key =~ /^del_([A-Za-z0-9][A-Za-z0-9\-]{0,127})$/) {$id = $1}
 			unless ($id) {next}
-			print "<tr><td><span>$id</span></td>\n";
+			print "<tr><td><span>".&html_escape($id)."</span></td>\n";
 			print "<td>";
 			my $data;
 			if ($FORM{do} eq "Bcc to:") {
@@ -582,20 +605,20 @@ sub displayUI {
 				my @data = <$childout>;
 				waitpid ($cmdpid, 0);
 				chomp @data;
-				print $data[-1];
+				print &html_escape($data[-1]);
 
 				$cmdpid = open3($childin, $childout, $childout, "/usr/sbin/exim", @config, "-Mc", $id);
 				@data = <$childout>;
 				waitpid ($cmdpid, 0);
 				chomp @data;
-				print $data[-1];
+				print &html_escape($data[-1]);
 			} else {
 				my ($childin, $childout);
 				my $cmdpid = open3($childin, $childout, $childout, "/usr/sbin/exim", @config, "-Mrm", $id);
 				my @data = <$childout>;
 				waitpid ($cmdpid, 0);
 				chomp @data;
-				print $data[-1];
+				print &html_escape($data[-1]);
 			}
 			print "</td></tr>\n";
 			$total++;
@@ -610,7 +633,7 @@ sub displayUI {
 		my $flags;
 		if ($config =~ /mailscanner/) {undef @config}
 		if ($FORM{text} ne "" and $FORM{text} =~ /[^a-zA-Z0-9\-\_\.\@\+]/) {
-			print "Invalid data [$FORM{text}]";
+			print "Invalid data [".&html_escape($FORM{text})."]";
 		} else {
 			if ($FORM{force}) {$flags = "f"}
 			if ($FORM{frozen}) {$flags = "ff"}
@@ -632,9 +655,7 @@ sub displayUI {
 			waitpid ($cmdpid, 0);
 			chomp @data;
 			foreach my $line (@data) {
-				$line =~ s/>/&gt;/g;
-				$line =~ s/</&lt;/g;
-				print $line."\n";
+				print &html_escape($line)."\n";
 			}
 			print "</pre></div>\n";
 			print "</div>\n";
@@ -648,7 +669,7 @@ sub displayUI {
 			print "Empty regex";
 		} else {
 			print "<div class='panel panel-default'>\n";
-			print "<div class='panel-heading panel-heading-cxs'>Exigrep for $FORM{text}</div>\n";
+			print "<div class='panel-heading panel-heading-cxs'>Exigrep for ".&html_escape($FORM{text})."</div>\n";
 			print "<div class='panel-body'><pre style='white-space: pre-wrap'>";
 			my ($childin, $childout);
 			my $cmdpid = open3($childin, $childout, $childout, "/usr/sbin/exigrep", $FORM{text}, "$eximmainlog");
@@ -656,9 +677,7 @@ sub displayUI {
 			waitpid ($cmdpid, 0);
 			chomp @data;
 			foreach my $line (@data) {
-				$line =~ s/>/&gt;/g;
-				$line =~ s/</&lt;/g;
-				print $line."\n";
+				print &html_escape($line)."\n";
 			}
 			print "</pre></div>\n";
 			print "</div>\n";
@@ -666,29 +685,8 @@ sub displayUI {
 		print "<p><form action='$script' method='post'><input type='submit' class='btn btn-default'  value='Return'></form></p>\n";
 	}
 	elsif ($FORM{action} eq "upgrade") {
-		$| = 1; ## no critic
-
-		print "Retrieving new cmq package...\n";
-		print "<pre style='white-space: pre-wrap'>";
-		&printcmd("rm -Rfv /usr/src/cmq* ; cd /usr/src ; wget -q https://$downloadserver/cmq.tgz 2>&1");
-		print "</pre>";
-		if (! -z "/usr/src/cmq.tgz") {
-			print "Unpacking new cmq package...\n";
-			print "<pre style='white-space: pre-wrap'>";
-			&printcmd("cd /usr/src ; tar -xzf cmq.tgz ; cd cmq ; sh install.sh 2>&1");
-			print "</pre>";
-			print "Tidying up...\n";
-			print "<pre style='white-space: pre-wrap'>";
-			&printcmd("rm -Rfv /usr/src/cmq*");
-			print "</pre>";
-			print "...All done.\n";
-		}
-
-		open (my $IN, "<", "/etc/cmq/cmqversion.txt") or die $!;
-		$myv = <$IN>;
-		close ($IN);
-		chomp $myv;
-
+		print "<div class='alert alert-info'><h4>Automatic upgrades are disabled</h4>";
+		print "<p>Install updates manually from a locally verified package.</p></div>\n";
 		print "<p><form action='$script' method='post'><input type='submit' class='btn btn-default' value='Return'></form></p>\n";
 	}
 	else {
@@ -699,7 +697,7 @@ sub displayUI {
 		my @output = <$childout>;
 		waitpid ($cmdpid, 0);
 		chomp @output;
-		unless ($output[0]) {$output[0] = 0}
+		unless (defined($output[0]) and $output[0] =~ /^\d+$/) {$output[0] = 0}
 
 		my @eximoutput;
 		if ($config) {
@@ -708,7 +706,7 @@ sub displayUI {
 			@eximoutput = <$childout>;
 			waitpid ($cmdpid, 0);
 			chomp @eximoutput;
-			unless ($eximoutput[0]) {$eximoutput[0] = 0}
+			unless (defined($eximoutput[0]) and $eximoutput[0] =~ /^\d+$/) {$eximoutput[0] = 0}
 		}
 		if ($config =~ /mailscanner/) {
 			my @tmp = @eximoutput;
@@ -792,29 +790,13 @@ sub displayUI {
 		print "<tr><td colspan='2'><input type='submit' class='btn btn-default'  name='action' value='Queue Run'> <input type='reset' class='btn btn-default' value='Reset Form'></td></tr>\n";
 		print "</table>\n";
 
-		my ($status, $text) = &urlget("https://$downloadserver/cmq/cmqversion.txt");
-		my $actv = $text;
-		my $up = 0;
-
 		print "<table class='table table-striped table-bordered'>\n";
 		print "<thead><tr><th colspan='2'>Upgrade</th></tr></thead>";
-		if ($actv ne "") {
-			if ($actv =~ /^[\d\.]*$/) {
-				if ($actv > $myv) {
-					print "<tr><form action='$script' method='post'><td><input type='hidden' name='action' value='upgrade'><input type='submit' class='btn btn-default'  value='Upgrade cmq'></td><td><b>A new version of cmq (v$actv) is available. <a href='https://$downloadserver/cmq/CHANGELOG.txt' target='_blank'>View ChangeLog</a></b></td></form></tr>\n";
-				} else {
-					print "<tr><td colspan='2'>You appear to be running the latest version of cmq</td></tr>\n";
-				}
-				$up = 1;
-			}
-		}
-		unless ($up) {
-			print "<tr><td colspan='2'>Failed to determine the latest version of cmq: [$status] [$text]</td></tr>\n";
-		}
+		print "<tr><td colspan='2'>Automatic version checks and downloads are disabled. Install updates manually from a locally verified package.</td></tr>\n";
 		print "</table></form>\n";
 	}
 	print "<pre style='white-space: pre-wrap'>cmq: v$myv</pre>";
-	print "<p>&copy;2006-2019, <a href='http://www.configserver.com' target='_blank'>ConfigServer Services</a> (Jonathan Michaelson)</p>\n";
+	print "<p>&copy;2006-2019, ConfigServer Services (Jonathan Michaelson)</p>\n";
 
 	return;
 }
@@ -825,8 +807,12 @@ sub getqueue {
 	my $storable = shift;
 
 	if ($storable eq "storable" and -e "/etc/cmq/cmqstore") {
-		%queue = %{Storable::retrieve("/etc/cmq/cmqstore")};
-		return;
+		my $cached = eval {Storable::retrieve("/etc/cmq/cmqstore")};
+		if (ref($cached) eq "HASH") {
+			%queue = %{$cached};
+			return;
+		}
+		unlink "/etc/cmq/cmqstore";
 	}
 
 	my $pos = 0;
@@ -842,9 +828,11 @@ sub getqueue {
 		chomp $line;
 
 		if ($line eq "") {
-			$queue{$id}{to} =~ s/,$//;
-			if ($queue{$id}{to} =~ /\,/) {$expcnt++}
-			$count++;
+			if (&valid_message_id($id)) {
+				$queue{$id}{to} =~ s/,$//;
+				if ($queue{$id}{to} =~ /\,/) {$expcnt++}
+				$count++;
+			}
 			$pos = 0;
 			$id = 0;
 			next;
@@ -852,7 +840,7 @@ sub getqueue {
 
 		if ($pos == 0) {
 ##			if ($line =~ /^\s*(\w+)\s+(\S*)\s+(\w{6}-\w{6}-\w{2})\s+(<.*?>)/) {
-			if ($line =~ /^\s*(\w+)\s+(\S*)\s+(\S+)\s+(<.*?>)/) {
+			if ($line =~ /^\s*(\w+)\s+(\S*)\s+([A-Za-z0-9][A-Za-z0-9\-]{0,127})\s+(<.*?>)/) {
 				my $time = $1;
 				my $size = $2;
 				$id = $3;
@@ -872,7 +860,7 @@ sub getqueue {
 				$queuecnt++;
 				if ($line =~ /\*\*\* frozen \*\*\*$/) {$queue{$id}{frozen} = "*"}
 			}
-		} else {
+		} elsif (&valid_message_id($id)) {
 			$queue{$id}{to} .= "$line,";
 		}
 		$pos++;
@@ -880,8 +868,10 @@ sub getqueue {
 	waitpid ($cmdpid, 0);
 
 	if ($storable eq "storable") {
-		Storable::nstore(\%queue, "/etc/cmq/cmqstore");
-		chmod(0600,"/etc/cmq/cmqstore");
+		my $storetmp = "/etc/cmq/cmqstore.$$";
+		Storable::nstore(\%queue, $storetmp);
+		chmod(0600, $storetmp);
+		rename($storetmp, "/etc/cmq/cmqstore") or unlink $storetmp;
 	}
 
 	return;
@@ -900,10 +890,10 @@ sub confirmmodal {
 	print "<div class='modal-dialog modal-sm'>\n";
 	print "<div class='modal-content'>\n";
 	print "<div class='modal-body'>\n";
-	print "<h4>$text</h4>\n";
+	print "<h4>".&html_escape($text)."</h4>\n";
 	print "</div>\n";
 	print "<div class='modal-footer'>\n";
-	print "<button type='submit' class='btn btn-success' name='$name' value='$value'>Yes - Continue</button>\n";
+	print "<button type='submit' class='btn btn-success' name='".&html_escape($name)."' value='".&html_escape($value)."'>Yes - Continue</button>\n";
 	print "<button type='button' class='btn btn-danger' data-dismiss='modal'>No - Cancel</button>\n";
 	print "</div>\n";
 	print "</div>\n";
@@ -920,110 +910,47 @@ sub confirmmodal {
 }
 # end confirmmodal
 ###############################################################################
-# start urlget (v1.3)
-sub urlget {
-	my $url = shift;
-	my $file = shift;
-	my $status = 0;
-	my $timeout = 1200;
-	local $SIG{PIPE} = 'IGNORE';
+sub valid_message_id {
+	my $id = shift;
+	return defined($id) && $id =~ /\A[A-Za-z0-9][A-Za-z0-9\-]{0,127}\z/;
+}
 
-	use LWP::UserAgent;
-	my $ua = LWP::UserAgent->new;
-	$ua->timeout(30);
-	my $req = HTTP::Request->new(GET => $url);
-	my $res;
-	my $text;
+sub state_changing_action {
+	my $action = shift;
+	return defined($action) && $action =~ /\A(?:Delete Emails|delete|deliver|mass|Queue Run|upgrade)\z/;
+}
 
-	($status, $text) = eval {
-		local $SIG{__DIE__} = undef;
-		local $SIG{'ALRM'} = sub {die "Download timeout after $timeout seconds"};
-		alarm($timeout);
-		if ($file) {
-			$|=1; ## no critic
-			my $expected_length;
-			my $bytes_received = 0;
-			my $per = 0;
-			my $oldper = 0;
-			open (my $OUT, ">", "$file\.tmp") or return (1, "Unable to open $file\.tmp: $!");
-			binmode ($OUT);
-			print "...0\%\n";
-			$res = $ua->request($req,
-				sub {
-				my($chunk, $res) = @_;
-				$bytes_received += length($chunk);
-				unless (defined $expected_length) {$expected_length = $res->content_length || 0}
-				if ($expected_length) {
-					my $per = int(100 * $bytes_received / $expected_length);
-					if ((int($per / 5) == $per / 5) and ($per != $oldper)) {
-						print "...$per\%\n";
-						$oldper = $per;
-					}
-				} else {
-					print ".";
-				}
-				print $OUT $chunk;
-			});
-			close ($OUT);
-			print "\n";
-		} else {
-			$res = $ua->request($req);
-		}
-		alarm(0);
-		if ($res->is_success) {
-			if ($file) {
-				rename ("$file\.tmp","$file") or return (1, "Unable to rename $file\.tmp to $file: $!");
-				return (0, $file);
-			} else {
-				return (0, $res->content);
-			}
-		} else {
-			return (1, "Unable to download: ".$res->message);
-		}
-	};
-	alarm(0);
-	if ($@) {
-		return (1, $@);
-	}
-	if ($text) {
-		return ($status,$text);
-	} else {
-		return (1, "Download timeout after $timeout seconds");
-	}
+sub is_post_request {
+	return 1 if defined($ENV{REQUEST_METHOD}) && uc($ENV{REQUEST_METHOD}) eq "POST";
+	return 1 if defined($ENV{POST}) && length($ENV{POST});
+	return 0;
 }
-# end urlget
-###############################################################################
-## start printcmd
-sub printcmd {
-	my @command = @_;
-	my ($childin, $childout);
-	my $pid = open3($childin, $childout, $childout, @command);
-	while (<$childout>) {print $_}
-	waitpid ($pid, 0);
-	return;
+
+sub html_escape {
+	my $string = shift;
+	return "" unless defined $string;
+	$string =~ s/&/&amp;/g;
+	$string =~ s/</&lt;/g;
+	$string =~ s/>/&gt;/g;
+	$string =~ s/"/&quot;/g;
+	$string =~ s/'/&#39;/g;
+	return $string;
 }
-## end printcmd
-###############################################################################
-## start getdownloadserver
-sub getdownloadserver {
-	my @servers;
-	my $downloadservers = "/etc/cmq/downloadservers";
-	my $chosen;
-	if (-e $downloadservers) {
-		open (my $DOWNLOAD, "<", $downloadservers);
-		flock ($DOWNLOAD, LOCK_SH);
-		my @data = <$DOWNLOAD>;
-		close ($DOWNLOAD);
-		chomp @data;
-		foreach my $line (@data) {
-			if ($line =~ /^download/) {push @servers, $line}
-		}
-		$chosen = $servers[rand @servers];
+
+sub uri_escape {
+	my $string = shift;
+	return "" unless defined $string;
+	$string =~ s/([^A-Za-z0-9\-._~])/sprintf("%%%02X", ord($1))/ge;
+	return $string;
+}
+
+sub form_url {
+	my @fields = @_;
+	my @pairs;
+	foreach my $field (@fields) {
+		push @pairs, &uri_escape($field)."=".&uri_escape($FORM{$field});
 	}
-	if ($chosen eq "") {$chosen = "download.configserver.com"}
-	return $chosen;
+	return "?".join("&amp;", @pairs);
 }
-## end getdownloadserver
-###############################################################################
 
 1;

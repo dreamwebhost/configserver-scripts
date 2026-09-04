@@ -2,10 +2,7 @@
 
 ### All files within this repository are subject to the [GPL license](LICENSE.txt) as outlined in [COPYING.md](COPYING.md)
 
-These are the final copies of the scripts.
+For uninstallation of any of the scripts, go to the [uninstallers](uninstallers) directory.
 
-There is no intention to update any of these files, so any PR's or other contact will not receive a response. 
-
-For uninstallation of any of our scripts, go to the [uninstallers](uninstallers) directory.
-
+These are the final copies of the scripts with some security hardening.
 

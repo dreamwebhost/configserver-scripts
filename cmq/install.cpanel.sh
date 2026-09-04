@@ -2,8 +2,6 @@
 ###############################################################################
 # Copyright (C) 2006-2025 Jonathan Michaelson
 #
-# https://github.com/waytotheweb/scripts
-#
 # This program is free software; you can redistribute it and/or modify it under
 # the terms of the GNU General Public License as published by the Free Software
 # Foundation; either version 3 of the License, or (at your option) any later
@@ -17,27 +15,32 @@
 # You should have received a copy of the GNU General Public License along with
 # this program; if not, see <https://www.gnu.org/licenses>.
 ###############################################################################
-PATH=$PATH:/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+export PATH
+umask 077
 
-#First replace:
-if [ -e "/usr/local/cpanel/3rdparty/bin/perl" ]; then
-    find ./ -type f -exec sed -i 's%^#\!/usr/bin/perl%#\!/usr/local/cpanel/3rdparty/bin/perl%' {} \;
+if [ "$(id -u)" -ne 0 ]; then
+	echo "This installer must be run as root"
+	exit 1
 fi
 
-mkdir /etc/cmq
+mkdir -p /etc/cmq
 chmod 700 /etc/cmq
 
-mkdir /usr/local/cpanel/whostmgr/docroot/cgi/configserver
+mkdir -p /usr/local/cpanel/whostmgr/docroot/cgi/configserver
 chmod 700 /usr/local/cpanel/whostmgr/docroot/cgi/configserver
-mkdir /usr/local/cpanel/whostmgr/docroot/cgi/configserver/cmq
+mkdir -p /usr/local/cpanel/whostmgr/docroot/cgi/configserver/cmq
 chmod 700 /usr/local/cpanel/whostmgr/docroot/cgi/configserver/cmq
 
 cp -avf cpanel/cmq.cgi /usr/local/cpanel/whostmgr/docroot/cgi/configserver/cmq.cgi
+if [ -e "/usr/local/cpanel/3rdparty/bin/perl" ]; then
+    sed -i '1s%^#\!/usr/bin/perl%#\!/usr/local/cpanel/3rdparty/bin/perl%' /usr/local/cpanel/whostmgr/docroot/cgi/configserver/cmq.cgi
+fi
 chmod -v 700 /usr/local/cpanel/whostmgr/docroot/cgi/configserver/cmq.cgi
 
 cp -avf Modules /etc/cmq/
 cp -avf cmqversion.txt /etc/cmq/
-cp -avf downloadservers /etc/cmq/
+/bin/rm -f /etc/cmq/downloadservers
 cp -avf INSTALL.txt /etc/cmq/
 cp -avf uninstall.sh /etc/cmq/
 chmod 700 /etc/cmq/uninstall.sh
@@ -54,11 +57,6 @@ cp -af cpanel/cmq.tmpl /usr/local/cpanel/whostmgr/docroot/templates/
 /bin/rm -f /usr/local/cpanel/whostmgr/docroot/cgi/addon_cmq.cgi
 /bin/rm -f /usr/local/cpanel/whostmgr/docroot/cgi/cmqversion.txt
 /bin/rm -Rf /usr/local/cpanel/whostmgr/docroot/cgi/cmq
-
-#Second replace
-if [ -e "/usr/local/cpanel/3rdparty/bin/perl" ]; then
-	find ./ -type f -exec sed -i 's%^#\!/usr/local/cpanel/3rdparty/bin/perl%#\!/usr/bin/perl%' {} \;
-fi
 
 echo "ConfigServer Mail Queues has been installed."
 exit
